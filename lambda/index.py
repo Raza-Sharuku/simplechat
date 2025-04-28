@@ -1,10 +1,78 @@
 # lambda/index.py
 import json
 import os
-import boto3
-import re  # 正規表現モジュールをインポート
-from botocore.exceptions import ClientError
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import urllib.request
+import urllib.parse
+import urllib.error
 
+app = FastAPI()
+
+# CORSの設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class Message(BaseModel):
+    message: str
+
+@app.post("/infer")
+async def infer(message: Message):
+    try:
+        # Lambda関数のURLを環境変数から取得
+        lambda_url = os.environ.get("LAMBDA_URL", "https://474pt7nu4fzxl2mkn5a5u2w2du0ieuat.lambda-url.us-east-1.on.aws/")
+        if not lambda_url:
+            raise HTTPException(status_code=500, detail="Lambda URL not configured")
+
+        print(f"Sending request to Lambda URL: {lambda_url}")
+        
+        # リクエストボディの準備
+        request_body = json.dumps({
+            "message": message.message
+        }).encode('utf-8')
+        
+        print(f"Request body: {request_body.decode('utf-8')}")
+
+        # Lambda関数を呼び出す
+        try:
+            req = urllib.request.Request(
+                lambda_url,
+                data=request_body,
+                headers={
+                    'Content-Type': 'application/json',
+                    'Origin': 'http://localhost:8000'
+                },
+                method='POST'
+            )
+            
+            # レスポンスの取得
+            with urllib.request.urlopen(req) as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+                print(f"Response from Lambda: {json.dumps(response_data)}")
+                return response_data
+
+        except urllib.error.HTTPError as e:
+            print(f"HTTP Error: {e.code} - {e.reason}")
+            print(f"Error response body: {e.read().decode('utf-8')}")
+            raise HTTPException(status_code=e.code, detail=f"Lambda returned error: {e.reason}")
+            
+        except urllib.error.URLError as e:
+            print(f"URL Error: {str(e)}")
+            raise HTTPException(status_code=502, detail=f"Failed to connect to Lambda: {str(e)}")
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test")
+async def test():
+    return {"status": "ok", "message": "FastAPI server is running"}
 
 # Lambda コンテキストからリージョンを抽出する関数
 def extract_region_from_arn(arn):
